@@ -11,8 +11,10 @@
   },
   "dependencies": {
     "@athar/db": "workspace:*",
+    "@athar/extraction": "workspace:*",
     "@athar/shared": "workspace:*",
     "bullmq": "^5.17.0",
+    "drizzle-orm": "^0.36.0",
     "ioredis": "^5.4.1"
   },
   "devDependencies": {

@@ -17,9 +17,13 @@ import { z } from 'zod';
 import { calculateEmissions, resolveFactor, type CalculationActivity } from '@athar/calc';
 import { suggestSourceDraft } from '@athar/assistant';
 import {
+  activityEntries as activityEntriesTable,
   emissionSources as emissionSourcesTable,
   evidenceDocuments as evidenceDocumentsTable,
+  extractions as extractionsTable,
   facilities as facilitiesTable,
+  invitations as invitationsTable,
+  ledgerEntries as ledgerEntriesTable,
   memberships,
   organizations as organizationsTable,
   users as usersTable,
@@ -27,11 +31,14 @@ import {
 import { provisionalFactors } from '@athar/factors';
 import { runDataQualityChecks, type QualityActivity } from '@athar/dq';
 import { suggestReductionMeasures, type ReductionSource } from '@athar/reduction';
-import { eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 import { hashPassword, verifyPassword, type AuthUser } from './auth.js';
-import { invitations } from './store.js';
 import { persistEvidence } from './storage.js';
-import { getDb } from './database.js';
+import { getDb, withOrgScope } from './database.js';
+import { getExtractionQueue, closeQueues } from './queues.js';
+import { recordLedgerEntry } from './ledger.js';
+import { recordAudit } from './audit.js';
+import { resolveDbFactorId } from './factors.js';
 
 const emirates = [
   'abu_dhabi',
@@ -139,12 +146,25 @@ const reductionSchema = z.object({
 
 const assistantSchema = z.object({ message: z.string().trim().min(1).max(2000) });
 
+const confirmExtractionSchema = z.object({
+  sourceId: z.string().uuid(),
+  periodStart: z.string().date(),
+  periodEnd: z.string().date(),
+  quantity: z.number().finite().nonnegative(),
+  unit: sourceSchema.shape.unit,
+  gwpSet: z.enum(['AR5', 'AR6']),
+});
+
 function currentUser(request: { user: unknown }): AuthUser {
   return request.user as AuthUser;
 }
 
 function canManageFacilities(user: AuthUser): boolean {
   return ['owner', 'admin'].includes(user.role);
+}
+
+function canConfirmExtractions(user: AuthUser): boolean {
+  return ['owner', 'admin', 'data_provider', 'validator'].includes(user.role);
 }
 
 export async function buildApp() {
@@ -167,6 +187,9 @@ export async function buildApp() {
     timeWindow: '1 minute',
   });
 
+  if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
+    throw new Error('JWT_SECRET must be set when NODE_ENV=production');
+  }
   await app.register(jwt, {
     secret: process.env.JWT_SECRET ?? 'athar-local-development-secret-change-me',
   });
@@ -296,10 +319,9 @@ export async function buildApp() {
   app.get('/facilities', { onRequest: [app.authenticate] }, async (request) => {
     const user = currentUser(request);
     return {
-      facilities: await getDb()
-        .select()
-        .from(facilitiesTable)
-        .where(eq(facilitiesTable.orgId, user.orgId)),
+      facilities: await withOrgScope(user.orgId, (tx) =>
+        tx.select().from(facilitiesTable).where(eq(facilitiesTable.orgId, user.orgId)),
+      ),
     };
   });
 
@@ -310,16 +332,18 @@ export async function buildApp() {
       const user = currentUser(request);
       if (!canManageFacilities(user))
         return reply.code(403).send({ message: 'Admin role required' });
-      const [facility] = await getDb()
-        .insert(facilitiesTable)
-        .values({
-          name: request.body.name,
-          emirate: request.body.emirate,
-          jurisdictions: request.body.jurisdictions,
-          ...(request.body.sector ? { sector: request.body.sector } : {}),
-          orgId: user.orgId,
-        })
-        .returning();
+      const [facility] = await withOrgScope(user.orgId, (tx) =>
+        tx
+          .insert(facilitiesTable)
+          .values({
+            name: request.body.name,
+            emirate: request.body.emirate,
+            jurisdictions: request.body.jurisdictions,
+            ...(request.body.sector ? { sector: request.body.sector } : {}),
+            orgId: user.orgId,
+          })
+          .returning(),
+      );
       if (!facility) return reply.code(500).send({ message: 'Facility creation failed' });
       return reply.code(201).send({ facility });
     },
@@ -332,16 +356,19 @@ export async function buildApp() {
       const user = currentUser(request);
       if (!canManageFacilities(user))
         return reply.code(403).send({ message: 'Admin role required' });
-      const invitation = {
-        id: randomUUID(),
-        orgId: user.orgId,
-        email: request.body.email.toLowerCase(),
-        displayName: request.body.displayName,
-        role: request.body.role,
-        token: randomUUID(),
-        createdAt: new Date().toISOString(),
-      };
-      invitations.set(invitation.id, invitation);
+      const [invitation] = await withOrgScope(user.orgId, (tx) =>
+        tx
+          .insert(invitationsTable)
+          .values({
+            orgId: user.orgId,
+            email: request.body.email.toLowerCase(),
+            displayName: request.body.displayName,
+            role: request.body.role,
+            token: randomUUID(),
+          })
+          .returning(),
+      );
+      if (!invitation) return reply.code(500).send({ message: 'Invitation creation failed' });
       return reply.code(201).send({ invitation });
     },
   );
@@ -350,23 +377,27 @@ export async function buildApp() {
     const user = currentUser(request);
     if (!canManageFacilities(user)) return reply.code(403).send({ message: 'Admin role required' });
     return {
-      invitations: [...invitations.values()].filter((invite) => invite.orgId === user.orgId),
+      invitations: await withOrgScope(user.orgId, (tx) =>
+        tx.select().from(invitationsTable).where(eq(invitationsTable.orgId, user.orgId)),
+      ),
     };
   });
 
   app.get('/sources', { onRequest: [app.authenticate] }, async (request) => {
     const user = currentUser(request);
-    const orgFacilities = await getDb()
-      .select({ id: facilitiesTable.id })
-      .from(facilitiesTable)
-      .where(eq(facilitiesTable.orgId, user.orgId));
-    const facilityIds = orgFacilities.map((facility) => facility.id);
-    if (facilityIds.length === 0) return { sources: [] };
     return {
-      sources: await getDb()
-        .select()
-        .from(emissionSourcesTable)
-        .where(inArray(emissionSourcesTable.facilityId, facilityIds)),
+      sources: await withOrgScope(user.orgId, async (tx) => {
+        const orgFacilities = await tx
+          .select({ id: facilitiesTable.id })
+          .from(facilitiesTable)
+          .where(eq(facilitiesTable.orgId, user.orgId));
+        const facilityIds = orgFacilities.map((facility) => facility.id);
+        if (facilityIds.length === 0) return [];
+        return tx
+          .select()
+          .from(emissionSourcesTable)
+          .where(inArray(emissionSourcesTable.facilityId, facilityIds));
+      }),
     };
   });
 
@@ -375,39 +406,44 @@ export async function buildApp() {
     { onRequest: [app.authenticate], schema: { body: sourceSchema } },
     async (request, reply) => {
       const user = currentUser(request);
-      const [facility] = await getDb()
-        .select({ id: facilitiesTable.id, orgId: facilitiesTable.orgId })
-        .from(facilitiesTable)
-        .where(eq(facilitiesTable.id, request.body.facilityId));
-      if (!facility || facility.orgId !== user.orgId)
-        return reply.code(404).send({ message: 'Facility not found' });
       if (!['owner', 'admin', 'data_provider'].includes(user.role)) {
         return reply.code(403).send({ message: 'Data provider role required' });
       }
-      const [source] = await getDb()
-        .insert(emissionSourcesTable)
-        .values({
-          facilityId: request.body.facilityId,
-          ipccCategory: request.body.ipccCategory,
-          scope: request.body.scope,
-          fuelOrEnergyType: request.body.fuelOrEnergyType,
-          unit: request.body.unit,
-          ...(request.body.description ? { description: request.body.description } : {}),
-          isActive: true,
-        })
-        .returning();
-      if (!source) return reply.code(500).send({ message: 'Source creation failed' });
-      return reply.code(201).send({ source });
+      const outcome = await withOrgScope(user.orgId, async (tx) => {
+        const [facility] = await tx
+          .select({ id: facilitiesTable.id, orgId: facilitiesTable.orgId })
+          .from(facilitiesTable)
+          .where(eq(facilitiesTable.id, request.body.facilityId));
+        if (!facility || facility.orgId !== user.orgId) return { reason: 'not_found' as const };
+        const [created] = await tx
+          .insert(emissionSourcesTable)
+          .values({
+            facilityId: request.body.facilityId,
+            ipccCategory: request.body.ipccCategory,
+            scope: request.body.scope,
+            fuelOrEnergyType: request.body.fuelOrEnergyType,
+            unit: request.body.unit,
+            ...(request.body.description ? { description: request.body.description } : {}),
+            isActive: true,
+          })
+          .returning();
+        return created ? { source: created } : { reason: 'insert_failed' as const };
+      });
+      if ('reason' in outcome) {
+        return reply
+          .code(outcome.reason === 'not_found' ? 404 : 500)
+          .send({ message: outcome.reason === 'not_found' ? 'Facility not found' : 'Source creation failed' });
+      }
+      return reply.code(201).send({ source: outcome.source });
     },
   );
 
   app.get('/evidence', { onRequest: [app.authenticate] }, async (request) => {
     const user = currentUser(request);
     return {
-      documents: await getDb()
-        .select()
-        .from(evidenceDocumentsTable)
-        .where(eq(evidenceDocumentsTable.orgId, user.orgId)),
+      documents: await withOrgScope(user.orgId, (tx) =>
+        tx.select().from(evidenceDocumentsTable).where(eq(evidenceDocumentsTable.orgId, user.orgId)),
+      ),
     };
   });
 
@@ -509,7 +545,202 @@ export async function buildApp() {
       })
       .returning();
     if (!document) return reply.code(500).send({ message: 'Evidence metadata creation failed' });
+    await getExtractionQueue().add('extract', { evidenceDocumentId: document.id });
     return reply.code(201).send({ document });
+  });
+
+  app.get(
+    '/evidence/:id/extractions',
+    { onRequest: [app.authenticate], schema: { params: z.object({ id: z.string().uuid() }) } },
+    async (request, reply) => {
+      const user = currentUser(request);
+      const [document] = await getDb()
+        .select({ id: evidenceDocumentsTable.id, orgId: evidenceDocumentsTable.orgId })
+        .from(evidenceDocumentsTable)
+        .where(eq(evidenceDocumentsTable.id, request.params.id));
+      if (!document || document.orgId !== user.orgId)
+        return reply.code(404).send({ message: 'Evidence document not found' });
+      return {
+        extractions: await getDb()
+          .select()
+          .from(extractionsTable)
+          .where(eq(extractionsTable.documentId, document.id)),
+      };
+    },
+  );
+
+  app.post(
+    '/extractions/:id/reject',
+    { onRequest: [app.authenticate], schema: { params: z.object({ id: z.string().uuid() }) } },
+    async (request, reply) => {
+      const user = currentUser(request);
+      if (!canConfirmExtractions(user))
+        return reply.code(403).send({ message: 'Data provider or validator role required' });
+      const db = getDb();
+      const [extraction] = await db
+        .select({ id: extractionsTable.id, orgId: evidenceDocumentsTable.orgId })
+        .from(extractionsTable)
+        .innerJoin(evidenceDocumentsTable, eq(evidenceDocumentsTable.id, extractionsTable.documentId))
+        .where(eq(extractionsTable.id, request.params.id));
+      if (!extraction || extraction.orgId !== user.orgId)
+        return reply.code(404).send({ message: 'Extraction not found' });
+      const [updated] = await db
+        .update(extractionsTable)
+        .set({ status: 'rejected', confirmedBy: user.id, confirmedAt: new Date() })
+        .where(and(eq(extractionsTable.id, request.params.id), eq(extractionsTable.status, 'proposed')))
+        .returning();
+      if (!updated)
+        return reply.code(409).send({ message: 'Extraction is no longer pending review' });
+      await recordAudit(db, {
+        actor: user.id,
+        action: 'reject_extraction',
+        entity: 'extractions',
+        entityId: updated.id,
+      });
+      return { extraction: updated };
+    },
+  );
+
+  app.post(
+    '/extractions/:id/confirm',
+    {
+      onRequest: [app.authenticate],
+      schema: { params: z.object({ id: z.string().uuid() }), body: confirmExtractionSchema },
+    },
+    async (request, reply) => {
+      const user = currentUser(request);
+      if (!canConfirmExtractions(user))
+        return reply.code(403).send({ message: 'Data provider or validator role required' });
+      const db = getDb();
+      const input = request.body;
+
+      const [extraction] = await db
+        .select({
+          id: extractionsTable.id,
+          documentId: extractionsTable.documentId,
+          orgId: evidenceDocumentsTable.orgId,
+          status: extractionsTable.status,
+        })
+        .from(extractionsTable)
+        .innerJoin(evidenceDocumentsTable, eq(evidenceDocumentsTable.id, extractionsTable.documentId))
+        .where(eq(extractionsTable.id, request.params.id));
+      if (!extraction || extraction.orgId !== user.orgId)
+        return reply.code(404).send({ message: 'Extraction not found' });
+      if (extraction.status !== 'proposed')
+        return reply.code(409).send({ message: 'Extraction is no longer pending review' });
+
+      const [source] = await db
+        .select({
+          id: emissionSourcesTable.id,
+          ipccCategory: emissionSourcesTable.ipccCategory,
+          scope: emissionSourcesTable.scope,
+          fuelOrEnergyType: emissionSourcesTable.fuelOrEnergyType,
+          facilityOrgId: facilitiesTable.orgId,
+        })
+        .from(emissionSourcesTable)
+        .innerJoin(facilitiesTable, eq(facilitiesTable.id, emissionSourcesTable.facilityId))
+        .where(eq(emissionSourcesTable.id, input.sourceId));
+      if (!source || source.facilityOrgId !== user.orgId)
+        return reply.code(404).send({ message: 'Emission source not found' });
+
+      let calculation;
+      try {
+        const factor = resolveFactor(provisionalFactors, {
+          category: source.ipccCategory,
+          fuelOrEnergyType: source.fuelOrEnergyType,
+          unitIn: input.unit,
+          gwpSet: input.gwpSet,
+          periodStart: input.periodStart,
+        });
+        const activity: CalculationActivity = {
+          id: randomUUID(),
+          category: source.ipccCategory,
+          scope: source.scope,
+          quantity: input.quantity,
+          unit: input.unit,
+          periodStart: input.periodStart,
+        };
+        calculation = { result: calculateEmissions(activity, factor), factor };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Calculation failed';
+        return reply.code(422).send({ message });
+      }
+
+      const [updatedExtraction] = await db
+        .update(extractionsTable)
+        .set({ status: 'confirmed', confirmedBy: user.id, confirmedAt: new Date() })
+        .where(and(eq(extractionsTable.id, extraction.id), eq(extractionsTable.status, 'proposed')))
+        .returning();
+      if (!updatedExtraction)
+        return reply.code(409).send({ message: 'Extraction is no longer pending review' });
+
+      const [activityEntry] = await db
+        .insert(activityEntriesTable)
+        .values({
+          sourceId: input.sourceId,
+          periodStart: input.periodStart,
+          periodEnd: input.periodEnd,
+          quantity: input.quantity.toString(),
+          unit: input.unit,
+          extractionId: extraction.id,
+          evidenceDocumentId: extraction.documentId,
+          enteredBy: user.id,
+        })
+        .returning();
+      if (!activityEntry)
+        return reply.code(500).send({ message: 'Failed to record activity entry' });
+
+      const factorId = await resolveDbFactorId(db, calculation.factor);
+      const ledgerEntry = await recordLedgerEntry(db, {
+        activityId: activityEntry.id,
+        factorId,
+        normalizedQuantity: calculation.result.normalizedQuantity,
+        co2eTonnes: calculation.result.co2eTonnes,
+        calcVersion: calculation.result.calcVersion,
+      });
+      await recordAudit(db, {
+        actor: user.id,
+        action: 'confirm_extraction',
+        entity: 'ledger_entries',
+        entityId: ledgerEntry.id,
+        after: { activityEntryId: activityEntry.id, co2eTonnes: calculation.result.co2eTonnes },
+      });
+
+      return reply.code(201).send({ activityEntry, ledgerEntry });
+    },
+  );
+
+  app.get('/ledger', { onRequest: [app.authenticate] }, async (request) => {
+    const user = currentUser(request);
+    const orgFacilities = await getDb()
+      .select({ id: facilitiesTable.id })
+      .from(facilitiesTable)
+      .where(eq(facilitiesTable.orgId, user.orgId));
+    const facilityIds = orgFacilities.map((facility) => facility.id);
+    if (facilityIds.length === 0) return { entries: [] };
+    const orgSources = await getDb()
+      .select({ id: emissionSourcesTable.id })
+      .from(emissionSourcesTable)
+      .where(inArray(emissionSourcesTable.facilityId, facilityIds));
+    const sourceIds = orgSources.map((source) => source.id);
+    if (sourceIds.length === 0) return { entries: [] };
+    const orgActivityEntries = await getDb()
+      .select({ id: activityEntriesTable.id })
+      .from(activityEntriesTable)
+      .where(inArray(activityEntriesTable.sourceId, sourceIds));
+    const activityEntryIds = orgActivityEntries.map((entry) => entry.id);
+    if (activityEntryIds.length === 0) return { entries: [] };
+    return {
+      entries: await getDb()
+        .select()
+        .from(ledgerEntriesTable)
+        .where(inArray(ledgerEntriesTable.activityEntryId, activityEntryIds))
+        .orderBy(desc(ledgerEntriesTable.computedAt)),
+    };
+  });
+
+  app.addHook('onClose', async () => {
+    await closeQueues();
   });
 
   return app;

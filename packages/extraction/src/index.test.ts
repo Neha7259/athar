@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ClassificationError,
   classifyDocument,
   extractFromDocument,
   ExtractionError,
@@ -8,13 +9,29 @@ import {
 } from './index.js';
 
 describe('document classification and guardrails', () => {
-  it('classifies common UAE evidence names', () => {
-    expect(classifyDocument('ADDC fuel invoice.pdf', 'application/pdf').docType).toBe(
-      'fuel_invoice',
+  it('classifies a document from the model response, not the filename', async () => {
+    const result = await classifyDocument(
+      { file: Buffer.from('bytes'), filename: 'scan0001.pdf', mime: 'application/pdf' },
+      { complete: async () => JSON.stringify({ docType: 'fuel_invoice', language: 'ar' }) },
     );
-    expect(classifyDocument('meter.csv', 'text/csv').docType).toBe('meter_log');
+    expect(result.docType).toBe('fuel_invoice');
+    expect(result.language).toBe('ar');
   });
-  it('redacts email, UAE phone, and ID-like values before model calls', () => {
+  it('rejects invalid classification output', async () => {
+    await expect(
+      classifyDocument(
+        { file: Buffer.from('bytes'), filename: 'x.pdf', mime: 'application/pdf' },
+        { complete: async () => 'not json' },
+      ),
+    ).rejects.toThrow(ClassificationError);
+    await expect(
+      classifyDocument(
+        { file: Buffer.from('bytes'), filename: 'x.pdf', mime: 'application/pdf' },
+        { complete: async () => JSON.stringify({ docType: 'not_a_real_type', language: 'en' }) },
+      ),
+    ).rejects.toThrow(ClassificationError);
+  });
+  it('redacts email, UAE phone, and ID-like values', () => {
     const safe = redactPii('Contact jane@example.com or +971 50 123 4567, ID 784-123456789012');
     expect(safe).not.toContain('jane@example.com');
     expect(safe).not.toContain('+971');
@@ -53,6 +70,38 @@ describe('structured extraction', () => {
     );
     expect(result.fields[0]?.sourceRef.page).toBe(1);
     expect(fieldUnit(result.fields[0]!)).toBe('kWh');
+  });
+  it('redacts PII in returned snippets and values before the result leaves the module', async () => {
+    const result = await extractFromDocument(
+      {
+        file: Buffer.from('bill'),
+        filename: 'bill.pdf',
+        mime: 'application/pdf',
+        docType: 'utility_bill',
+      },
+      {
+        complete: async () =>
+          JSON.stringify({
+            docType: 'utility_bill',
+            language: 'en',
+            confidence: 0.9,
+            fields: [
+              {
+                name: 'account_holder_contact',
+                value: 'jane@example.com',
+                confidence: 0.8,
+                sourceRef: {
+                  page: 1,
+                  snippet: 'Account holder: jane@example.com, +971 50 123 4567',
+                },
+              },
+            ],
+          }),
+      },
+    );
+    expect(result.fields[0]?.value).toBe('[REDACTED_EMAIL]');
+    expect(result.fields[0]?.sourceRef.snippet).not.toContain('jane@example.com');
+    expect(result.fields[0]?.sourceRef.snippet).not.toContain('+971');
   });
   it('rejects invalid model JSON and schema output', async () => {
     const request = {

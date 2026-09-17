@@ -1,1 +1,1 @@
-{"version":"7","dialect":"postgresql","entries":[{"idx":0,"version":"7","when":1726531200000,"tag":"0000_initial_schema","breakpoints":true}]}
+{"version":"7","dialect":"postgresql","entries":[{"idx":0,"version":"7","when":1726531200000,"tag":"0000_initial_schema","breakpoints":true},{"idx":1,"version":"7","when":1758470400000,"tag":"0001_emission_factors_unique_set_code","breakpoints":true},{"idx":2,"version":"7","when":1758470500000,"tag":"0002_invitations","breakpoints":true},{"idx":3,"version":"7","when":1758470600000,"tag":"0003_row_level_security","breakpoints":true}]}

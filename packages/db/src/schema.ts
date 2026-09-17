@@ -115,6 +115,18 @@ export const memberships = pgTable(
   (t) => [uniqueIndex('memberships_org_user_uq').on(t.orgId, t.userId)],
 );
 
+export const invitations = pgTable('invitations', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  orgId: uuid('org_id')
+    .notNull()
+    .references(() => organizations.id),
+  email: text('email').notNull(),
+  displayName: text('display_name').notNull(),
+  role: roleEnum('role').notNull(),
+  token: text('token').notNull().unique(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const emissionSources = pgTable('emission_sources', {
   id: uuid('id').primaryKey().defaultRandom(),
   facilityId: uuid('facility_id')
@@ -162,20 +174,24 @@ export const extractions = pgTable('extractions', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
-export const emissionFactors = pgTable('emission_factors', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  setCode: text('set_code').notNull(), // e.g. UAE-GRID-DXB-2025, IPCC-2006, DEFRA-2025
-  category: ipccCategoryEnum('category').notNull(),
-  fuelOrEnergyType: text('fuel_or_energy_type').notNull(),
-  unitIn: unitEnum('unit_in').notNull(),
-  unitOut: text('unit_out').notNull().default('tCO2e'),
-  value: numeric('value', { precision: 18, scale: 9 }).notNull(),
-  gwpSet: gwpSetEnum('gwp_set').notNull(),
-  validFrom: date('valid_from').notNull(),
-  validTo: date('valid_to'),
-  sourceUrl: text('source_url'),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-});
+export const emissionFactors = pgTable(
+  'emission_factors',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    setCode: text('set_code').notNull(), // e.g. UAE-GRID-DXB-2025, IPCC-2006, DEFRA-2025
+    category: ipccCategoryEnum('category').notNull(),
+    fuelOrEnergyType: text('fuel_or_energy_type').notNull(),
+    unitIn: unitEnum('unit_in').notNull(),
+    unitOut: text('unit_out').notNull().default('tCO2e'),
+    value: numeric('value', { precision: 18, scale: 9 }).notNull(),
+    gwpSet: gwpSetEnum('gwp_set').notNull(),
+    validFrom: date('valid_from').notNull(),
+    validTo: date('valid_to'),
+    sourceUrl: text('source_url'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('emission_factors_set_code_uq').on(t.setCode)],
+);
 
 export const activityEntries = pgTable('activity_entries', {
   id: uuid('id').primaryKey().defaultRandom(),

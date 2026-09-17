@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pnpm --filter @athar/extraction test)",
+      "Bash(pnpm test *)",
+      "Bash(NODE_ENV=production node --experimental-strip-types -e ' *)",
+      "Bash(npx tsx *)",
+      "Bash(pnpm format:check)",
+      "Bash(grep -iE \"database\\\\.ts|store\\\\.ts|app\\\\.ts|seed\\\\.ts|env\\\\.example|package\\\\.json.*\\(web|db\\)$|extraction/src/index\")",
+      "Bash(pnpm format:check --no-color)",
+      "Read(//tmp/**)",
+      "Bash(pnpm --filter @athar/db db:generate)",
+      "Bash(pnpm db:migrate)",
+      "Bash(docker exec *)"
+    ]
+  }
+}

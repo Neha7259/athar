@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
-import type { DocType, OcrLang, Unit } from '@athar/shared';
+import { DOC_TYPES, OCR_LANGS, type DocType, type Unit } from '@athar/shared';
 
 export const sourceRefSchema = z.object({
   page: z.number().int().positive(),
@@ -40,6 +40,7 @@ export interface ExtractionCompletion {
 }
 
 export class ExtractionError extends Error {}
+export class ClassificationError extends Error {}
 
 export function redactPii(text: string): string {
   return text
@@ -48,40 +49,76 @@ export function redactPii(text: string): string {
     .replace(/\b(?:784|784-)[0-9-]{12,}\b/g, '[REDACTED_ID]');
 }
 
-export function classifyDocument(
-  filename: string,
-  mime: string,
-): { docType: DocType; language: OcrLang } {
-  const name = filename.toLowerCase();
-  const docType: DocType =
-    name.includes('fuel') || name.includes('diesel')
-      ? 'fuel_invoice'
-      : name.includes('cool') || name.includes('tabreed') || name.includes('empower')
-        ? 'cooling_invoice'
-        : name.includes('refriger')
-          ? 'refrigerant_log'
-          : name.includes('meter')
-            ? 'meter_log'
-            : mime.includes('spreadsheet') || name.endsWith('.csv')
-              ? 'meter_log'
-              : 'utility_bill';
-  const language: OcrLang = /[\u0600-\u06ff]/u.test(filename) ? 'mixed' : 'en';
-  return { docType, language };
+export const classificationResultSchema = z.object({
+  docType: z.enum(DOC_TYPES),
+  language: z.enum(OCR_LANGS),
+});
+export type ClassificationResult = z.infer<typeof classificationResultSchema>;
+
+export interface ClassificationRequest {
+  file: Buffer;
+  filename: string;
+  mime: string;
+}
+
+/**
+ * Classify a document's type and language from its actual content (a Haiku
+ * vision call) rather than its filename \u2014 filename hints are unreliable
+ * (renamed files, generic names) and were the pre-Sonnet-4.5-era stand-in
+ * this replaced. Runs before extractFromDocument in the worker's pipeline
+ * (projectBrief.md section 7, step 1).
+ */
+export async function classifyDocument(
+  request: ClassificationRequest,
+  completion: ExtractionCompletion,
+): Promise<ClassificationResult> {
+  const prompt = [
+    'Classify this UAE industrial evidence document from its actual content.',
+    `Valid docType values: ${DOC_TYPES.join(', ')}.`,
+    `Valid language values: ${OCR_LANGS.join(', ')} (use "mixed" when both Arabic and English appear).`,
+    'Return JSON only: { "docType": "...", "language": "..." }.',
+  ].join(' ');
+  const raw = await completion.complete(prompt, request.file, request.mime);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new ClassificationError('Model returned invalid JSON');
+  }
+  const result = classificationResultSchema.safeParse(parsed);
+  if (!result.success)
+    throw new ClassificationError('Model output did not match the classification schema');
+  return result.data;
+}
+
+function redactExtractedField(field: ExtractedField): ExtractedField {
+  return {
+    ...field,
+    value: typeof field.value === 'string' ? redactPii(field.value) : field.value,
+    sourceRef: { ...field.sourceRef, snippet: redactPii(field.sourceRef.snippet) },
+  };
+}
+
+// Regex-based redaction cannot run on the document image/PDF bytes sent to
+// the vision model below — it only ever sees text. Instead we redact the
+// verbatim snippets and values the model returns before the result is
+// returned to the caller, since that is the text that would otherwise leak
+// PII (emails, UAE phone numbers, Emirates ID numbers) into logs or the DB.
+function redactExtractionResult(result: ExtractionResult): ExtractionResult {
+  return { ...result, fields: result.fields.map(redactExtractedField) };
 }
 
 export async function extractFromDocument(
   request: ExtractionRequest,
   completion: ExtractionCompletion,
 ): Promise<ExtractionResult> {
-  const prompt = redactPii(
-    [
-      'Extract structured activity data from this UAE industrial evidence document.',
-      `Document type: ${request.docType}.`,
-      'Return JSON only with docType, language, optional periodStart/periodEnd, confidence, and fields.',
-      'Every field must include a page, a verbatim short snippet, and confidence between 0 and 1.',
-      'Do not infer missing values. Use the document language and preserve Arabic text in snippets.',
-    ].join(' '),
-  );
+  const prompt = [
+    'Extract structured activity data from this UAE industrial evidence document.',
+    `Document type: ${request.docType}.`,
+    'Return JSON only with docType, language, optional periodStart/periodEnd, confidence, and fields.',
+    'Every field must include a page, a verbatim short snippet, and confidence between 0 and 1.',
+    'Do not infer missing values. Use the document language and preserve Arabic text in snippets.',
+  ].join(' ');
   const raw = await completion.complete(prompt, request.file, request.mime);
   let parsed: unknown;
   try {
@@ -92,11 +129,15 @@ export async function extractFromDocument(
   const result = extractionResultSchema.safeParse(parsed);
   if (!result.success)
     throw new ExtractionError('Model output did not match the extraction schema');
-  return result.data;
+  return redactExtractionResult(result.data);
 }
 
+/**
+ * Generic Anthropic-backed completion adapter — used both for classification
+ * (pass a Haiku model id) and structured extraction (the Sonnet default).
+ */
 export function createAnthropicExtractor(apiKey: string, model = 'claude-sonnet-4-5') {
-  if (!apiKey.trim()) throw new ExtractionError('ANTHROPIC_API_KEY is required for extraction');
+  if (!apiKey.trim()) throw new ExtractionError('ANTHROPIC_API_KEY is required');
   const client = new Anthropic({ apiKey });
   return {
     async complete(prompt: string, image: Buffer, mime: string): Promise<string> {

@@ -17,7 +17,8 @@
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "db:generate": "pnpm --filter @athar/db db:generate",
-    "db:migrate": "pnpm --filter @athar/db db:migrate"
+    "db:migrate": "pnpm --filter @athar/db db:migrate",
+    "db:seed": "pnpm --filter @athar/db db:seed"
   },
   "devDependencies": {
     "@eslint/js": "^9.13.0",
