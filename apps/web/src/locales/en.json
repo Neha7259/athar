@@ -1,0 +1,22 @@
+{
+  "app": {
+    "name": "Athar",
+    "tagline": "Audit-grade emissions ledger for UAE industry"
+  },
+  "nav": {
+    "dashboard": "Dashboard",
+    "evidence": "Evidence Vault",
+    "sources": "Source Register",
+    "ledger": "Ledger",
+    "exports": "Exports",
+    "language": "العربية"
+  },
+  "shell": {
+    "apiStatus": "API status",
+    "checking": "checking…",
+    "connected": "connected",
+    "disconnected": "disconnected",
+    "welcome": "From a folder of PDFs to a verifier-ready GHG inventory.",
+    "comingSoon": "Coming soon in this sprint plan"
+  }
+}

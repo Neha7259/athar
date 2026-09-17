@@ -1,0 +1,11 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html[dir='rtl'] body {
+  font-family:
+    'Noto Sans Arabic',
+    system-ui,
+    -apple-system,
+    sans-serif;
+}
