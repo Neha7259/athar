@@ -13,6 +13,7 @@
   "dependencies": {
     "@athar/calc": "workspace:*",
     "@athar/db": "workspace:*",
+    "@athar/dq": "workspace:*",
     "@athar/factors": "workspace:*",
     "@athar/shared": "workspace:*",
     "@fastify/cors": "^10.0.1",

@@ -14,6 +14,7 @@ import {
 import { z } from 'zod';
 import { calculateEmissions, resolveFactor, type CalculationActivity } from '@athar/calc';
 import { provisionalFactors } from '@athar/factors';
+import { runDataQualityChecks, type QualityActivity } from '@athar/dq';
 import { hashPassword, verifyPassword, type AuthUser } from './auth.js';
 import {
   createFacility,
@@ -104,6 +105,19 @@ const calculationSchema = z.object({
   periodStart: z.string().date(),
   fuelOrEnergyType: z.string().trim().min(2).max(120),
   gwpSet: z.enum(['AR5', 'AR6']),
+});
+
+const dqSchema = z.object({
+  reportingYear: z.number().int().min(2020).max(2100),
+  entries: z.array(z.object({
+    id: z.string().min(1),
+    sourceId: z.string().min(1),
+    periodStart: z.string().date(),
+    quantity: z.number().finite().nonnegative(),
+    unit: sourceSchema.shape.unit,
+    evidenceDocumentId: z.string().min(1).optional(),
+    documentSha256: z.string().min(1).optional(),
+  })),
 });
 
 function currentUser(request: { user: unknown }): AuthUser {
@@ -351,6 +365,16 @@ export async function buildApp() {
         return reply.code(422).send({ message });
       }
     },
+  );
+
+  app.post(
+    '/dq/preview',
+    { onRequest: [app.authenticate], schema: { body: dqSchema } },
+    async (request) => ({
+      flags: runDataQualityChecks(request.body.entries as QualityActivity[], {
+        reportingYear: request.body.reportingYear,
+      }),
+    }),
   );
 
   app.post('/evidence', { onRequest: [app.authenticate] }, async (request, reply) => {

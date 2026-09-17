@@ -92,6 +92,18 @@ describe('local auth and facility onboarding', () => {
     expect(calculation.json().calculation.co2eTonnes).toBe(0.6);
     expect(calculation.json().factor.provisional).toBe(true);
 
+    const dq = await app.inject({
+      method: 'POST',
+      url: '/dq/preview',
+      headers: { authorization: `Bearer ${registration.token}` },
+      payload: {
+        reportingYear: 2026,
+        entries: [{ id: 'entry-1', sourceId: 'source-1', periodStart: '2026-01-01', quantity: 10, unit: 'kWh' }],
+      },
+    });
+    expect(dq.statusCode).toBe(200);
+    expect(dq.json().flags).toHaveLength(11);
+
     const multipart = formAutoContent({
       file: {
         value: Buffer.from('synthetic electricity bill'),
