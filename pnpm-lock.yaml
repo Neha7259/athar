@@ -29,9 +29,15 @@ importers:
 
   apps/api:
     dependencies:
+      '@athar/calc':
+        specifier: workspace:*
+        version: link:../../packages/calc
       '@athar/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@athar/factors':
+        specifier: workspace:*
+        version: link:../../packages/factors
       '@athar/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -153,6 +159,19 @@ importers:
         specifier: ^2.1.3
         version: 2.1.9(@types/node@22.20.3)
 
+  packages/calc:
+    dependencies:
+      '@athar/shared':
+        specifier: workspace:*
+        version: link:../shared
+    devDependencies:
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.3
+        version: 2.1.9(@types/node@22.20.3)
+
   packages/db:
     dependencies:
       '@athar/shared':
@@ -174,6 +193,19 @@ importers:
       tsx:
         specifier: ^4.19.1
         version: 4.23.13
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.3
+        version: 2.1.9(@types/node@22.20.3)
+
+  packages/factors:
+    dependencies:
+      '@athar/calc':
+        specifier: workspace:*
+        version: link:../calc
+    devDependencies:
       typescript:
         specifier: ^5.6.3
         version: 5.9.3

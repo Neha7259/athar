@@ -12,6 +12,8 @@ import {
   type ZodTypeProvider,
 } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { calculateEmissions, resolveFactor, type CalculationActivity } from '@athar/calc';
+import { provisionalFactors } from '@athar/factors';
 import { hashPassword, verifyPassword, type AuthUser } from './auth.js';
 import {
   createFacility,
@@ -92,6 +94,17 @@ const evidenceDocTypes = [
   'meter_log',
   'other',
 ] as const;
+
+const calculationSchema = z.object({
+  id: z.string().min(1),
+  category: sourceSchema.shape.ipccCategory,
+  scope: z.enum(['scope1', 'scope2']),
+  quantity: z.number().finite().nonnegative(),
+  unit: sourceSchema.shape.unit,
+  periodStart: z.string().date(),
+  fuelOrEnergyType: z.string().trim().min(2).max(120),
+  gwpSet: z.enum(['AR5', 'AR6']),
+});
 
 function currentUser(request: { user: unknown }): AuthUser {
   return request.user as AuthUser;
@@ -310,6 +323,35 @@ export async function buildApp() {
       ),
     };
   });
+
+  app.post(
+    '/calculations/preview',
+    { onRequest: [app.authenticate], schema: { body: calculationSchema } },
+    async (request, reply) => {
+      const input = request.body;
+      try {
+        const factor = resolveFactor(provisionalFactors, {
+          category: input.category,
+          fuelOrEnergyType: input.fuelOrEnergyType,
+          unitIn: input.unit,
+          gwpSet: input.gwpSet,
+          periodStart: input.periodStart,
+        });
+        const activity: CalculationActivity = {
+          id: input.id,
+          category: input.category,
+          scope: input.scope,
+          quantity: input.quantity,
+          unit: input.unit,
+          periodStart: input.periodStart,
+        };
+        return { calculation: calculateEmissions(activity, factor), factor };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Calculation failed';
+        return reply.code(422).send({ message });
+      }
+    },
+  );
 
   app.post('/evidence', { onRequest: [app.authenticate] }, async (request, reply) => {
     const user = currentUser(request);

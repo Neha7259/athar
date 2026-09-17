@@ -73,6 +73,25 @@ describe('local auth and facility onboarding', () => {
     expect(source.statusCode).toBe(201);
     expect(source.json().source.ipccCategory).toBe('purchased_electricity');
 
+    const calculation = await app.inject({
+      method: 'POST',
+      url: '/calculations/preview',
+      headers: { authorization: `Bearer ${registration.token}` },
+      payload: {
+        id: 'activity-preview-1',
+        category: 'purchased_electricity',
+        scope: 'scope2',
+        quantity: 1500,
+        unit: 'kWh',
+        periodStart: '2026-01-01',
+        fuelOrEnergyType: 'grid_electricity_dubai',
+        gwpSet: 'AR6',
+      },
+    });
+    expect(calculation.statusCode).toBe(200);
+    expect(calculation.json().calculation.co2eTonnes).toBe(0.6);
+    expect(calculation.json().factor.provisional).toBe(true);
+
     const multipart = formAutoContent({
       file: {
         value: Buffer.from('synthetic electricity bill'),
