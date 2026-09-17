@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import formAutoContentModule from 'form-auto-content';
 import { buildApp } from './app.js';
+
+const formAutoContent = formAutoContentModule as unknown as (input: Record<string, unknown>) => {
+  headers: Record<string, string>;
+  payload: NodeJS.ReadableStream;
+};
 
 describe('health endpoint', () => {
   it('returns ok', async () => {
@@ -49,7 +55,40 @@ describe('local auth and facility onboarding', () => {
       },
     });
     expect(createFacility.statusCode).toBe(201);
+    const facilityId = createFacility.json().facility.id as string;
     expect(createFacility.json().facility.name).toBe('KIZAD Plant 1');
+
+    const source = await app.inject({
+      method: 'POST',
+      url: '/sources',
+      headers: { authorization: `Bearer ${registration.token}` },
+      payload: {
+        facilityId,
+        ipccCategory: 'purchased_electricity',
+        scope: 'scope2',
+        fuelOrEnergyType: 'grid_electricity_abu_dhabi',
+        unit: 'kWh',
+      },
+    });
+    expect(source.statusCode).toBe(201);
+    expect(source.json().source.ipccCategory).toBe('purchased_electricity');
+
+    const multipart = formAutoContent({
+      file: {
+        value: Buffer.from('synthetic electricity bill'),
+        options: { filename: 'bill.pdf', contentType: 'application/pdf' },
+      },
+      docType: 'utility_bill',
+      ocrLang: 'en',
+    });
+    const evidence = await app.inject({
+      method: 'POST',
+      url: '/evidence',
+      headers: { authorization: `Bearer ${registration.token}`, ...multipart.headers },
+      payload: multipart.payload,
+    });
+    expect(evidence.statusCode).toBe(201);
+    expect(evidence.json().document.retentionUntil).toMatch(/^2031-/);
 
     const facilities = await app.inject({
       method: 'GET',

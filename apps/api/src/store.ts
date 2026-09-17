@@ -29,10 +29,37 @@ export interface Invitation {
   createdAt: string;
 }
 
+export interface EmissionSource {
+  id: string;
+  facilityId: string;
+  ipccCategory: string;
+  scope: 'scope1' | 'scope2';
+  fuelOrEnergyType: string;
+  unit: string;
+  description?: string;
+  isActive: boolean;
+}
+
+export interface EvidenceDocument {
+  id: string;
+  orgId: string;
+  sha256: string;
+  storageKey: string;
+  mime: string;
+  docType: string;
+  originalFilename: string;
+  uploadedBy: string;
+  uploadedAt: string;
+  retentionUntil: string;
+  ocrLang?: string;
+}
+
 export const organizations = new Map<string, Organization>();
 export const facilities = new Map<string, Facility>();
 export const users = new Map<string, StoredUser>();
 export const invitations = new Map<string, Invitation>();
+export const emissionSources = new Map<string, EmissionSource>();
+export const evidenceDocuments = new Map<string, EvidenceDocument>();
 
 export function createOrganization(input: Omit<Organization, 'id'>): Organization {
   const organization = { id: randomUUID(), ...input };

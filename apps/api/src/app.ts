@@ -2,6 +2,7 @@ import Fastify, { type FastifyRequest } from 'fastify';
 import { randomUUID } from 'node:crypto';
 import cors from '@fastify/cors';
 import jwt from '@fastify/jwt';
+import multipart from '@fastify/multipart';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
 import {
@@ -15,12 +16,15 @@ import { hashPassword, verifyPassword, type AuthUser } from './auth.js';
 import {
   createFacility,
   createOrganization,
+  emissionSources,
+  evidenceDocuments,
   facilities,
   invitations,
   organizations,
   toAuthUser,
   users,
 } from './store.js';
+import { persistEvidence } from './storage.js';
 
 const emirates = [
   'abu_dhabi',
@@ -63,6 +67,32 @@ const invitationSchema = z.object({
   role: z.enum(['admin', 'data_provider', 'validator', 'verifier_readonly']),
 });
 
+const sourceSchema = z.object({
+  facilityId: z.string().uuid(),
+  ipccCategory: z.enum([
+    'stationary_combustion',
+    'mobile_combustion',
+    'process_emissions',
+    'fugitive_refrigerants',
+    'purchased_electricity',
+    'purchased_cooling',
+  ]),
+  scope: z.enum(['scope1', 'scope2']),
+  fuelOrEnergyType: z.string().trim().min(2).max(120),
+  unit: z.enum(['kWh', 'MWh', 'litre', 'm3', 'kg', 'tonne', 'TR_hour', 'km', 'GJ']),
+  description: z.string().trim().max(500).optional(),
+});
+
+const evidenceDocTypes = [
+  'utility_bill',
+  'fuel_invoice',
+  'cooling_invoice',
+  'refrigerant_log',
+  'fleet_statement',
+  'meter_log',
+  'other',
+] as const;
+
 function currentUser(request: { user: unknown }): AuthUser {
   return request.user as AuthUser;
 }
@@ -89,6 +119,7 @@ export async function buildApp() {
   await app.register(jwt, {
     secret: process.env.JWT_SECRET ?? 'athar-local-development-secret-change-me',
   });
+  await app.register(multipart, { limits: { fileSize: 25 * 1024 * 1024, files: 1 } });
 
   await app.register(swagger, {
     openapi: {
@@ -229,6 +260,101 @@ export async function buildApp() {
     return {
       invitations: [...invitations.values()].filter((invite) => invite.orgId === user.orgId),
     };
+  });
+
+  app.get('/sources', { onRequest: [app.authenticate] }, async (request) => {
+    const user = currentUser(request);
+    const orgFacilityIds = new Set(
+      [...facilities.values()]
+        .filter((facility) => facility.orgId === user.orgId)
+        .map((facility) => facility.id),
+    );
+    return {
+      sources: [...emissionSources.values()].filter((source) =>
+        orgFacilityIds.has(source.facilityId),
+      ),
+    };
+  });
+
+  app.post(
+    '/sources',
+    { onRequest: [app.authenticate], schema: { body: sourceSchema } },
+    async (request, reply) => {
+      const user = currentUser(request);
+      const facility = facilities.get(request.body.facilityId);
+      if (!facility || facility.orgId !== user.orgId)
+        return reply.code(404).send({ message: 'Facility not found' });
+      if (!['owner', 'admin', 'data_provider'].includes(user.role)) {
+        return reply.code(403).send({ message: 'Data provider role required' });
+      }
+      const source = {
+        id: randomUUID(),
+        facilityId: request.body.facilityId,
+        ipccCategory: request.body.ipccCategory,
+        scope: request.body.scope,
+        fuelOrEnergyType: request.body.fuelOrEnergyType,
+        unit: request.body.unit,
+        ...(request.body.description ? { description: request.body.description } : {}),
+        isActive: true,
+      };
+      emissionSources.set(source.id, source);
+      return reply.code(201).send({ source });
+    },
+  );
+
+  app.get('/evidence', { onRequest: [app.authenticate] }, async (request) => {
+    const user = currentUser(request);
+    return {
+      documents: [...evidenceDocuments.values()].filter(
+        (document) => document.orgId === user.orgId,
+      ),
+    };
+  });
+
+  app.post('/evidence', { onRequest: [app.authenticate] }, async (request, reply) => {
+    const user = currentUser(request);
+    const file = await request.file();
+    if (!file) return reply.code(400).send({ message: 'A file is required' });
+    const buffer = await file.toBuffer();
+    const docTypeField = file.fields.docType;
+    const ocrLangField = file.fields.ocrLang;
+    const docTypeValue =
+      docTypeField &&
+      !Array.isArray(docTypeField) &&
+      'value' in docTypeField &&
+      typeof docTypeField.value === 'string'
+        ? docTypeField.value
+        : 'other';
+    const ocrLangValue =
+      ocrLangField &&
+      !Array.isArray(ocrLangField) &&
+      'value' in ocrLangField &&
+      typeof ocrLangField.value === 'string'
+        ? ocrLangField.value
+        : undefined;
+    const docType = z.enum(evidenceDocTypes).safeParse(docTypeValue);
+    const ocrLang = z.enum(['ar', 'en', 'mixed']).safeParse(ocrLangValue);
+    if (!docType.success || (ocrLangValue && !ocrLang.success)) {
+      return reply.code(400).send({ message: 'Invalid document type or OCR language' });
+    }
+    const persisted = await persistEvidence(buffer, file.filename);
+    const uploadedAt = new Date();
+    const retentionUntil = new Date(uploadedAt);
+    retentionUntil.setFullYear(retentionUntil.getFullYear() + 5);
+    const document = {
+      id: randomUUID(),
+      orgId: user.orgId,
+      ...persisted,
+      mime: file.mimetype,
+      docType: docType.data,
+      originalFilename: file.filename,
+      uploadedBy: user.id,
+      uploadedAt: uploadedAt.toISOString(),
+      retentionUntil: retentionUntil.toISOString().slice(0, 10),
+      ...(ocrLang.data ? { ocrLang: ocrLang.data } : {}),
+    };
+    evidenceDocuments.set(document.id, document);
+    return reply.code(201).send({ document });
   });
 
   return app;

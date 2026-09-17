@@ -24,6 +24,9 @@ export default function App() {
   const [message, setMessage] = useState('');
   const [facilityCount, setFacilityCount] = useState(0);
   const [invitationCount, setInvitationCount] = useState(0);
+  const [facilityId, setFacilityId] = useState('');
+  const [sourceCount, setSourceCount] = useState(0);
+  const [evidenceCount, setEvidenceCount] = useState(0);
 
   const toggleLang = () => {
     const next: Lang = i18n.language === 'ar' ? 'en' : 'ar';
@@ -71,6 +74,8 @@ export default function App() {
       }),
     });
     if (response.ok) {
+      const result = (await response.json()) as { facility: { id: string } };
+      setFacilityId(result.facility.id);
       setFacilityCount((count) => count + 1);
       event.currentTarget.reset();
       setMessage('Facility added');
@@ -93,6 +98,46 @@ export default function App() {
       setInvitationCount((count) => count + 1);
       event.currentTarget.reset();
       setMessage('Invitation created');
+    }
+  }
+
+  async function createSource(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!facilityId) {
+      setMessage('Add a facility first');
+      return;
+    }
+    const form = new FormData(event.currentTarget);
+    const response = await fetch('/api/sources', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        facilityId,
+        ipccCategory: form.get('ipccCategory'),
+        scope: form.get('scope'),
+        fuelOrEnergyType: form.get('fuelOrEnergyType'),
+        unit: form.get('unit'),
+      }),
+    });
+    if (response.ok) {
+      setSourceCount((count) => count + 1);
+      event.currentTarget.reset();
+      setMessage('Source added');
+    }
+  }
+
+  async function uploadEvidence(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const response = await fetch('/api/evidence', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}` },
+      body: form,
+    });
+    if (response.ok) {
+      setEvidenceCount((count) => count + 1);
+      event.currentTarget.reset();
+      setMessage('Evidence uploaded and retained for five years');
     }
   }
 
@@ -241,6 +286,68 @@ export default function App() {
                 Create invitation
               </button>
               <p className="text-sm text-gray-500">{invitationCount} created this session</p>
+            </form>
+            <form onSubmit={createSource} className="space-y-3 rounded-lg bg-white p-6 shadow-sm">
+              <h2 className="text-lg font-semibold text-athar-700">Source register</h2>
+              <select
+                name="ipccCategory"
+                defaultValue="purchased_electricity"
+                className="w-full rounded border p-2"
+              >
+                <option value="stationary_combustion">Stationary combustion</option>
+                <option value="mobile_combustion">Mobile combustion</option>
+                <option value="process_emissions">Process emissions</option>
+                <option value="fugitive_refrigerants">Fugitive refrigerants</option>
+                <option value="purchased_electricity">Purchased electricity</option>
+                <option value="purchased_cooling">Purchased cooling</option>
+              </select>
+              <select name="scope" defaultValue="scope2" className="w-full rounded border p-2">
+                <option value="scope1">Scope 1</option>
+                <option value="scope2">Scope 2</option>
+              </select>
+              <input
+                name="fuelOrEnergyType"
+                required
+                placeholder="Fuel or energy type"
+                className="w-full rounded border p-2"
+              />
+              <select name="unit" defaultValue="kWh" className="w-full rounded border p-2">
+                <option value="kWh">kWh</option>
+                <option value="litre">litre</option>
+                <option value="kg">kg</option>
+                <option value="TR_hour">TR-hour</option>
+              </select>
+              <button className="rounded bg-athar-600 px-4 py-2 text-white">Add source</button>
+              <p className="text-sm text-gray-500">{sourceCount} added this session</p>
+            </form>
+            <form onSubmit={uploadEvidence} className="space-y-3 rounded-lg bg-white p-6 shadow-sm">
+              <h2 className="text-lg font-semibold text-athar-700">Evidence vault</h2>
+              <input
+                name="file"
+                required
+                type="file"
+                accept=".pdf,.png,.jpg,.jpeg,.csv"
+                className="w-full rounded border p-2"
+              />
+              <select
+                name="docType"
+                defaultValue="utility_bill"
+                className="w-full rounded border p-2"
+              >
+                <option value="utility_bill">Utility bill</option>
+                <option value="fuel_invoice">Fuel invoice</option>
+                <option value="cooling_invoice">Cooling invoice</option>
+                <option value="refrigerant_log">Refrigerant log</option>
+                <option value="meter_log">Meter log</option>
+                <option value="other">Other</option>
+              </select>
+              <select name="ocrLang" defaultValue="mixed" className="w-full rounded border p-2">
+                <option value="mixed">Arabic + English</option>
+                <option value="en">English</option>
+                <option value="ar">Arabic</option>
+              </select>
+              <button className="rounded bg-athar-600 px-4 py-2 text-white">Upload evidence</button>
+              <p className="text-sm text-gray-500">{evidenceCount} uploaded this session</p>
             </form>
           </div>
         )}
