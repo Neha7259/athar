@@ -225,3 +225,6 @@ Do not build any features yet. When finished, list what you created and any open
 | 2026-09-17 | Extraction uses a provider-agnostic contract with a Claude adapter                 | Keep structured extraction tests independent of API credentials and model availability                         |
 | 2026-09-17 | Demo factors are explicitly provisional until official UAE values are verified     | Never present an unverified factor as regulatory truth                                                         |
 | 2026-09-17 | Local Evidence Vault uses content-addressed files as a development storage adapter | Preserve SHA-256 and retention behavior locally; switch the adapter to MinIO/S3 before pilot deployment        |
+| 2026-09-17 | Source Register assistant always returns a draft requiring human confirmation      | AI may propose categories and units, but cannot write an emission source directly                              |
+| 2026-09-17 | Synthetic extraction eval manifest covers 30 cases across five document types      | Keep the CI/eval contract ready while real anonymized bills are still unavailable                              |
+| 2026-09-17 | API hardening starts with Helmet headers and configurable rate limiting            | Reduce common web/API exposure before pilot-specific RLS and observability work                                |
