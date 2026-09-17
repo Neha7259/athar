@@ -98,7 +98,15 @@ describe('local auth and facility onboarding', () => {
       headers: { authorization: `Bearer ${registration.token}` },
       payload: {
         reportingYear: 2026,
-        entries: [{ id: 'entry-1', sourceId: 'source-1', periodStart: '2026-01-01', quantity: 10, unit: 'kWh' }],
+        entries: [
+          {
+            id: 'entry-1',
+            sourceId: 'source-1',
+            periodStart: '2026-01-01',
+            quantity: 10,
+            unit: 'kWh',
+          },
+        ],
       },
     });
     expect(dq.statusCode).toBe(200);

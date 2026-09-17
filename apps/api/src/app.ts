@@ -109,15 +109,17 @@ const calculationSchema = z.object({
 
 const dqSchema = z.object({
   reportingYear: z.number().int().min(2020).max(2100),
-  entries: z.array(z.object({
-    id: z.string().min(1),
-    sourceId: z.string().min(1),
-    periodStart: z.string().date(),
-    quantity: z.number().finite().nonnegative(),
-    unit: sourceSchema.shape.unit,
-    evidenceDocumentId: z.string().min(1).optional(),
-    documentSha256: z.string().min(1).optional(),
-  })),
+  entries: z.array(
+    z.object({
+      id: z.string().min(1),
+      sourceId: z.string().min(1),
+      periodStart: z.string().date(),
+      quantity: z.number().finite().nonnegative(),
+      unit: sourceSchema.shape.unit,
+      evidenceDocumentId: z.string().min(1).optional(),
+      documentSha256: z.string().min(1).optional(),
+    }),
+  ),
 });
 
 function currentUser(request: { user: unknown }): AuthUser {

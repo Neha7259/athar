@@ -8,7 +8,7 @@
 
 **Athar is an audit-grade emissions ledger for UAE mid-market industrials — the system of record that turns fragmented bills, meter logs and invoices into a verifier-ready, IEQT-ready GHG inventory.**
 
-Positioning: *Xero for carbon, built for the UAE MRV regime.* Not a calculator — a ledger.
+Positioning: _Xero for carbon, built for the UAE MRV regime._ Not a calculator — a ledger.
 
 ---
 
@@ -40,6 +40,7 @@ Positioning: *Xero for carbon, built for the UAE MRV regime.* Not a calculator �
 **Goal**: one facility can go from "folder of PDFs" to "verifier-ready Scope 1+2 inventory + IEQT export" end-to-end. This is the hackathon demo.
 
 ### In scope
+
 - Org / facility onboarding (UAE Pass login + email/password fallback)
 - **Evidence Vault**: upload PDFs/images/CSV; stored immutably with hash; 5-year retention flag
 - **AI Extraction**: bills & invoices → structured activity data (kWh, litres, tonnes, kg refrigerant, TR-hours) with confidence + source-page bounding reference; Arabic + English
@@ -52,6 +53,7 @@ Positioning: *Xero for carbon, built for the UAE MRV regime.* Not a calculator �
 - **Audit trail viewer**: full history of any number
 
 ### Explicitly out of scope for Phase 1
+
 - Scope 3, carbon credit / NRCC integration, carbon-pricing simulation, billing/subscriptions, verifier marketplace, lender API, mobile app, real-time CEMS/IoT ingestion (design the interface, don't build it).
 
 ---
@@ -79,19 +81,20 @@ Positioning: *Xero for carbon, built for the UAE MRV regime.* Not a calculator �
 ```
 
 ### Stack decisions
-| Concern | Choice | Why |
-|---|---|---|
-| DB | **Postgres 16** | Relational integrity + append-only ledger + row-level security for multi-tenant. Not Mongo — this is accounting, not documents. |
-| ORM | Drizzle | Type-safe, migrations as code, no magic. |
-| API | Fastify + Zod + OpenAPI | Fast, typed, auto-docs for verifier/lender integrations later. |
-| Jobs | BullMQ on Redis | Extraction and PDF generation are slow; must be async with retries. |
-| Object storage | MinIO (S3-compatible) locally; S3/UAE-region bucket in prod | Data-residency story for investors and regulators. |
-| LLM | Claude API (Sonnet for extraction, Haiku for classification/triage) with structured JSON output; pdf → images for vision | Arabic/English bills with tables; vision handles scanned invoices. |
-| Vector search | pgvector (Phase 2) | Evidence semantic search; keep Postgres-only. |
-| Auth | UAE Pass (OIDC) + local auth; JWT + refresh; RBAC (Owner, Admin, Data Provider, Validator, Verifier-ReadOnly) | Mirrors IEQT's role model. |
-| PDF | Playwright (HTML → PDF) | Full control over Verifier Pack layout, RTL support. |
-| Observability | pino logs, OpenTelemetry traces, Sentry | Enterprise credibility. |
-| Testing | Vitest (unit), Supertest (API), Playwright (e2e), golden-file tests for exports | Calculation engine must have 100% coverage. |
+
+| Concern        | Choice                                                                                                                   | Why                                                                                                                             |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| DB             | **Postgres 16**                                                                                                          | Relational integrity + append-only ledger + row-level security for multi-tenant. Not Mongo — this is accounting, not documents. |
+| ORM            | Drizzle                                                                                                                  | Type-safe, migrations as code, no magic.                                                                                        |
+| API            | Fastify + Zod + OpenAPI                                                                                                  | Fast, typed, auto-docs for verifier/lender integrations later.                                                                  |
+| Jobs           | BullMQ on Redis                                                                                                          | Extraction and PDF generation are slow; must be async with retries.                                                             |
+| Object storage | MinIO (S3-compatible) locally; S3/UAE-region bucket in prod                                                              | Data-residency story for investors and regulators.                                                                              |
+| LLM            | Claude API (Sonnet for extraction, Haiku for classification/triage) with structured JSON output; pdf → images for vision | Arabic/English bills with tables; vision handles scanned invoices.                                                              |
+| Vector search  | pgvector (Phase 2)                                                                                                       | Evidence semantic search; keep Postgres-only.                                                                                   |
+| Auth           | UAE Pass (OIDC) + local auth; JWT + refresh; RBAC (Owner, Admin, Data Provider, Validator, Verifier-ReadOnly)            | Mirrors IEQT's role model.                                                                                                      |
+| PDF            | Playwright (HTML → PDF)                                                                                                  | Full control over Verifier Pack layout, RTL support.                                                                            |
+| Observability  | pino logs, OpenTelemetry traces, Sentry                                                                                  | Enterprise credibility.                                                                                                         |
+| Testing        | Vitest (unit), Supertest (API), Playwright (e2e), golden-file tests for exports                                          | Calculation engine must have 100% coverage.                                                                                     |
 
 ---
 
@@ -132,20 +135,20 @@ Guardrails: PII redaction before model calls; no model output enters the ledger 
 
 ## 8. Build plan (12 weeks, solo, Claude Code-driven)
 
-Each sprint = one Claude Code "epic". Start each session with: *"Read PROJECT_BRIEF.md and DATA_MODEL.md. We are on Sprint N. Here's today's task…"*
+Each sprint = one Claude Code "epic". Start each session with: _"Read PROJECT_BRIEF.md and DATA_MODEL.md. We are on Sprint N. Here's today's task…"_
 
-| Sprint | Weeks | Deliverable | Definition of done |
-|---|---|---|---|
-| 0 | 1 | Monorepo, docker-compose, CI, lint/test scaffolding, DATA_MODEL.md, first migration | `docker compose up` gives a running API + web shell; CI green |
-| 1 | 2 | Auth (local + UAE Pass stub), orgs/facilities/RBAC, i18n + RTL shell | Can create org → facility → invite user |
-| 2 | 3 | Evidence Vault (upload, hash, MinIO, retention), Source Register CRUD | Documents immutable; sources mapped to IPCC categories |
-| 3 | 4–5 | Extraction module + worker + review UI (confirm/reject with highlighted source) | 5 doc types extract with ≥90% field accuracy on eval set |
-| 4 | 6 | Factor library + calc engine + ledger (append-only) | Golden tests pass; supersession works; audit log complete |
-| 5 | 7 | DQ rules + explanations; dashboard | Completeness + readiness scores live |
-| 6 | 8–9 | Exports: IEQT, EAD, Verifier Pack PDF | Field-by-field mapping documented; PDF renders RTL |
-| 7 | 10 | Source Register conversational assistant; Reduction Plan lite | Demo path fully AI-assisted |
-| 8 | 11 | Hardening: RLS, rate limits, OpenTelemetry, seed data, demo org | Security checklist passed |
-| 9 | 12 | DEMO_SCRIPT.md, pitch deck data, landing page, pilot outreach kit | 7-minute demo rehearsed end-to-end |
+| Sprint | Weeks | Deliverable                                                                         | Definition of done                                            |
+| ------ | ----- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| 0      | 1     | Monorepo, docker-compose, CI, lint/test scaffolding, DATA_MODEL.md, first migration | `docker compose up` gives a running API + web shell; CI green |
+| 1      | 2     | Auth (local + UAE Pass stub), orgs/facilities/RBAC, i18n + RTL shell                | Can create org → facility → invite user                       |
+| 2      | 3     | Evidence Vault (upload, hash, MinIO, retention), Source Register CRUD               | Documents immutable; sources mapped to IPCC categories        |
+| 3      | 4–5   | Extraction module + worker + review UI (confirm/reject with highlighted source)     | 5 doc types extract with ≥90% field accuracy on eval set      |
+| 4      | 6     | Factor library + calc engine + ledger (append-only)                                 | Golden tests pass; supersession works; audit log complete     |
+| 5      | 7     | DQ rules + explanations; dashboard                                                  | Completeness + readiness scores live                          |
+| 6      | 8–9   | Exports: IEQT, EAD, Verifier Pack PDF                                               | Field-by-field mapping documented; PDF renders RTL            |
+| 7      | 10    | Source Register conversational assistant; Reduction Plan lite                       | Demo path fully AI-assisted                                   |
+| 8      | 11    | Hardening: RLS, rate limits, OpenTelemetry, seed data, demo org                     | Security checklist passed                                     |
+| 9      | 12    | DEMO_SCRIPT.md, pitch deck data, landing page, pilot outreach kit                   | 7-minute demo rehearsed end-to-end                            |
 
 ---
 
@@ -165,20 +168,20 @@ Each sprint = one Claude Code "epic". Start each session with: *"Read PROJECT_BR
 
 - **Channels**: free-zone business-services desks (JAFZA, KIZAD, DIC, SAIF, Hamriyah); accounting/ESG boutiques as resellers; MOCCAE-approved verifiers (they push clients to whatever makes verification cheap).
 - **Pricing**: per facility per year, tiered by sources; Verifier Workspace add-on; consultancy white-label.
-- **Moat**: evidence + supersession ledger + jurisdiction mappings + verifier workflow — *not* the arithmetic.
+- **Moat**: evidence + supersession ledger + jurisdiction mappings + verifier workflow — _not_ the arithmetic.
 - **Second waves**: Scope 3 (2027), SME assurance (2027), sector targets, Abu Dhabi carbon pricing, lender "MRV readiness" attestation API.
 
 ---
 
 ## 11. Risks & mitigations
 
-| Risk | Mitigation |
-|---|---|
-| IEQT adds ingestion/evidence features | Moat is verification workflow + multi-jurisdiction + ledger integrity, not calculation |
-| Methodology / factor changes | Factor sets versioned with validity windows; recalculation creates new ledger entries |
-| Arabic extraction accuracy | Vision models + eval set; human confirmation gate |
-| Data residency concerns | UAE-region storage; document it in the security page |
-| Solo builder velocity | Strict MVP scope; calc engine and exports first-class tested; everything else "good enough" |
+| Risk                                  | Mitigation                                                                                  |
+| ------------------------------------- | ------------------------------------------------------------------------------------------- |
+| IEQT adds ingestion/evidence features | Moat is verification workflow + multi-jurisdiction + ledger integrity, not calculation      |
+| Methodology / factor changes          | Factor sets versioned with validity windows; recalculation creates new ledger entries       |
+| Arabic extraction accuracy            | Vision models + eval set; human confirmation gate                                           |
+| Data residency concerns               | UAE-region storage; document it in the security page                                        |
+| Solo builder velocity                 | Strict MVP scope; calc engine and exports first-class tested; everything else "good enough" |
 
 ---
 
@@ -212,13 +215,13 @@ Do not build any features yet. When finished, list what you created and any open
 
 ## 14. Decision Log
 
-| Date | Decision | Rationale |
-|---|---|---|
-| 2026-09-17 | Postgres over MongoDB for the ledger | Append-only integrity, RLS multi-tenancy, relational factor/activity joins matter more than schema flexibility |
-| 2026-09-17 | Human confirmation gate before any AI output enters the ledger | Regulatory defensibility; verifiers will ask "who signed off" |
-| 2026-09-17 | Rules decide DQ flags; LLM only explains | Deterministic, testable, auditable |
-| 2026-09-17 | Export templates as mapping files, not code branches | Regulator template churn is expected |
-| 2026-09-17 | MVP = single vertical slice to Verifier Pack; Scope 3 / carbon pricing deferred | Hackathon demo needs one complete, convincing loop |
-| 2026-09-17 | Extraction uses a provider-agnostic contract with a Claude adapter | Keep structured extraction tests independent of API credentials and model availability |
-| 2026-09-17 | Demo factors are explicitly provisional until official UAE values are verified | Never present an unverified factor as regulatory truth |
-| 2026-09-17 | Local Evidence Vault uses content-addressed files as a development storage adapter | Preserve SHA-256 and retention behavior locally; switch the adapter to MinIO/S3 before pilot deployment |
+| Date       | Decision                                                                           | Rationale                                                                                                      |
+| ---------- | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| 2026-09-17 | Postgres over MongoDB for the ledger                                               | Append-only integrity, RLS multi-tenancy, relational factor/activity joins matter more than schema flexibility |
+| 2026-09-17 | Human confirmation gate before any AI output enters the ledger                     | Regulatory defensibility; verifiers will ask "who signed off"                                                  |
+| 2026-09-17 | Rules decide DQ flags; LLM only explains                                           | Deterministic, testable, auditable                                                                             |
+| 2026-09-17 | Export templates as mapping files, not code branches                               | Regulator template churn is expected                                                                           |
+| 2026-09-17 | MVP = single vertical slice to Verifier Pack; Scope 3 / carbon pricing deferred    | Hackathon demo needs one complete, convincing loop                                                             |
+| 2026-09-17 | Extraction uses a provider-agnostic contract with a Claude adapter                 | Keep structured extraction tests independent of API credentials and model availability                         |
+| 2026-09-17 | Demo factors are explicitly provisional until official UAE values are verified     | Never present an unverified factor as regulatory truth                                                         |
+| 2026-09-17 | Local Evidence Vault uses content-addressed files as a development storage adapter | Preserve SHA-256 and retention behavior locally; switch the adapter to MinIO/S3 before pilot deployment        |
