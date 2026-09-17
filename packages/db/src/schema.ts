@@ -15,17 +15,32 @@ import {
 // Enum tuples inlined here so drizzle-kit (CJS runner) does not need to resolve
 // the @athar/shared ESM workspace package. Keep these in sync with packages/shared/src/enums.ts.
 const EMIRATES = [
-  'abu_dhabi', 'dubai', 'sharjah', 'ajman', 'umm_al_quwain', 'ras_al_khaimah', 'fujairah',
+  'abu_dhabi',
+  'dubai',
+  'sharjah',
+  'ajman',
+  'umm_al_quwain',
+  'ras_al_khaimah',
+  'fujairah',
 ] as const;
 const ROLES = ['owner', 'admin', 'data_provider', 'validator', 'verifier_readonly'] as const;
 const SCOPES = ['scope1', 'scope2'] as const;
 const IPCC_CATEGORIES = [
-  'stationary_combustion', 'mobile_combustion', 'process_emissions',
-  'fugitive_refrigerants', 'purchased_electricity', 'purchased_cooling',
+  'stationary_combustion',
+  'mobile_combustion',
+  'process_emissions',
+  'fugitive_refrigerants',
+  'purchased_electricity',
+  'purchased_cooling',
 ] as const;
 const DOC_TYPES = [
-  'utility_bill', 'fuel_invoice', 'cooling_invoice', 'refrigerant_log',
-  'fleet_statement', 'meter_log', 'other',
+  'utility_bill',
+  'fuel_invoice',
+  'cooling_invoice',
+  'refrigerant_log',
+  'fleet_statement',
+  'meter_log',
+  'other',
 ] as const;
 const EXTRACTION_STATUSES = ['proposed', 'confirmed', 'rejected'] as const;
 const GWP_SETS = ['AR5', 'AR6'] as const;
