@@ -114,7 +114,7 @@ describe('local auth and facility onboarding', () => {
 
     const multipart = formAutoContent({
       file: {
-        value: Buffer.from('synthetic electricity bill'),
+        value: Buffer.from(`synthetic electricity bill ${email}`),
         options: { filename: 'bill.pdf', contentType: 'application/pdf' },
       },
       docType: 'utility_bill',
