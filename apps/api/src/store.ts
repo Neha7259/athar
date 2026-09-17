@@ -74,8 +74,13 @@ export function createFacility(input: Omit<Facility, 'id'>): Facility {
 }
 
 export function toAuthUser(user: StoredUser): AuthUser {
-  const { passwordHash: _passwordHash, ...publicUser } = user;
-  return publicUser;
+  return {
+    id: user.id,
+    email: user.email,
+    displayName: user.displayName,
+    role: user.role,
+    orgId: user.orgId,
+  };
 }
 
 export function hasOrgRole(user: AuthUser, roles: readonly UserRole[]): boolean {

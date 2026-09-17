@@ -4,7 +4,9 @@ import { suggestSourceDraft } from './index.js';
 describe('source register assistant fallback', () => {
   it('recognizes English and Arabic electricity prompts', () => {
     expect(suggestSourceDraft('Our DEWA electricity bill is monthly').draft?.scope).toBe('scope2');
-    expect(suggestSourceDraft('فاتورة كهرباء شهرية').draft?.ipccCategory).toBe('purchased_electricity');
+    expect(suggestSourceDraft('فاتورة كهرباء شهرية').draft?.ipccCategory).toBe(
+      'purchased_electricity',
+    );
   });
   it('always requires human confirmation', () => {
     const result = suggestSourceDraft('diesel generator fuel');
