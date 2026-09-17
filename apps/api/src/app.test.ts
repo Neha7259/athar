@@ -112,6 +112,17 @@ describe('local auth and facility onboarding', () => {
     expect(dq.statusCode).toBe(200);
     expect(dq.json().flags).toHaveLength(11);
 
+    const reduction = await app.inject({
+      method: 'POST',
+      url: '/reduction/preview',
+      headers: { authorization: `Bearer ${registration.token}` },
+      payload: {
+        sources: [{ sourceId: 'source-1', category: 'purchased_electricity', fuelOrEnergyType: 'grid', annualTco2e: 1000 }],
+      },
+    });
+    expect(reduction.statusCode).toBe(200);
+    expect(reduction.json().measures[0].status).toBe('proposed');
+
     const multipart = formAutoContent({
       file: {
         value: Buffer.from(`synthetic electricity bill ${email}`),

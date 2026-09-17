@@ -23,6 +23,7 @@ import {
 } from '@athar/db';
 import { provisionalFactors } from '@athar/factors';
 import { runDataQualityChecks, type QualityActivity } from '@athar/dq';
+import { suggestReductionMeasures, type ReductionSource } from '@athar/reduction';
 import { eq, inArray } from 'drizzle-orm';
 import { hashPassword, verifyPassword, type AuthUser } from './auth.js';
 import { invitations } from './store.js';
@@ -120,6 +121,15 @@ const dqSchema = z.object({
       documentSha256: z.string().min(1).optional(),
     }),
   ),
+});
+
+const reductionSchema = z.object({
+  sources: z.array(z.object({
+    sourceId: z.string().min(1),
+    category: sourceSchema.shape.ipccCategory,
+    fuelOrEnergyType: z.string().min(1),
+    annualTco2e: z.number().finite().nonnegative(),
+  })),
 });
 
 function currentUser(request: { user: unknown }): AuthUser {
@@ -425,6 +435,14 @@ export async function buildApp() {
       flags: runDataQualityChecks(request.body.entries as QualityActivity[], {
         reportingYear: request.body.reportingYear,
       }),
+    }),
+  );
+
+  app.post(
+    '/reduction/preview',
+    { onRequest: [app.authenticate], schema: { body: reductionSchema } },
+    async (request) => ({
+      measures: suggestReductionMeasures(request.body.sources as ReductionSource[]),
     }),
   );
 
