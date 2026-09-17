@@ -117,11 +117,28 @@ describe('local auth and facility onboarding', () => {
       url: '/reduction/preview',
       headers: { authorization: `Bearer ${registration.token}` },
       payload: {
-        sources: [{ sourceId: 'source-1', category: 'purchased_electricity', fuelOrEnergyType: 'grid', annualTco2e: 1000 }],
+        sources: [
+          {
+            sourceId: 'source-1',
+            category: 'purchased_electricity',
+            fuelOrEnergyType: 'grid',
+            annualTco2e: 1000,
+          },
+        ],
       },
     });
     expect(reduction.statusCode).toBe(200);
     expect(reduction.json().measures[0].status).toBe('proposed');
+
+    const assistant = await app.inject({
+      method: 'POST',
+      url: '/source-assistant/preview',
+      headers: { authorization: `Bearer ${registration.token}` },
+      payload: { message: 'Our DEWA electricity bill is monthly' },
+    });
+    expect(assistant.statusCode).toBe(200);
+    expect(assistant.json().draft.ipccCategory).toBe('purchased_electricity');
+    expect(assistant.json().needsConfirmation).toBe(true);
 
     const multipart = formAutoContent({
       file: {

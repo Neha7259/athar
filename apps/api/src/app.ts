@@ -1,8 +1,10 @@
 import Fastify, { type FastifyRequest } from 'fastify';
 import { randomUUID } from 'node:crypto';
 import cors from '@fastify/cors';
+import helmet from '@fastify/helmet';
 import jwt from '@fastify/jwt';
 import multipart from '@fastify/multipart';
+import rateLimit from '@fastify/rate-limit';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
 import {
@@ -13,6 +15,7 @@ import {
 } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { calculateEmissions, resolveFactor, type CalculationActivity } from '@athar/calc';
+import { suggestSourceDraft } from '@athar/assistant';
 import {
   emissionSources as emissionSourcesTable,
   evidenceDocuments as evidenceDocumentsTable,
@@ -124,13 +127,17 @@ const dqSchema = z.object({
 });
 
 const reductionSchema = z.object({
-  sources: z.array(z.object({
-    sourceId: z.string().min(1),
-    category: sourceSchema.shape.ipccCategory,
-    fuelOrEnergyType: z.string().min(1),
-    annualTco2e: z.number().finite().nonnegative(),
-  })),
+  sources: z.array(
+    z.object({
+      sourceId: z.string().min(1),
+      category: sourceSchema.shape.ipccCategory,
+      fuelOrEnergyType: z.string().min(1),
+      annualTco2e: z.number().finite().nonnegative(),
+    }),
+  ),
 });
+
+const assistantSchema = z.object({ message: z.string().trim().min(1).max(2000) });
 
 function currentUser(request: { user: unknown }): AuthUser {
   return request.user as AuthUser;
@@ -153,6 +160,11 @@ export async function buildApp() {
   await app.register(cors, {
     origin: process.env.WEB_ORIGIN ?? 'http://localhost:5173',
     credentials: true,
+  });
+  await app.register(helmet);
+  await app.register(rateLimit, {
+    max: Number(process.env.API_RATE_LIMIT ?? 120),
+    timeWindow: '1 minute',
   });
 
   await app.register(jwt, {
@@ -444,6 +456,12 @@ export async function buildApp() {
     async (request) => ({
       measures: suggestReductionMeasures(request.body.sources as ReductionSource[]),
     }),
+  );
+
+  app.post(
+    '/source-assistant/preview',
+    { onRequest: [app.authenticate], schema: { body: assistantSchema } },
+    async (request) => suggestSourceDraft(request.body.message),
   );
 
   app.post('/evidence', { onRequest: [app.authenticate] }, async (request, reply) => {
