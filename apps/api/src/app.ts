@@ -1,5 +1,7 @@
-import Fastify from 'fastify';
+import Fastify, { type FastifyRequest } from 'fastify';
+import { randomUUID } from 'node:crypto';
 import cors from '@fastify/cors';
+import jwt from '@fastify/jwt';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
 import {
@@ -9,6 +11,65 @@ import {
   type ZodTypeProvider,
 } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { hashPassword, verifyPassword, type AuthUser } from './auth.js';
+import {
+  createFacility,
+  createOrganization,
+  facilities,
+  invitations,
+  organizations,
+  toAuthUser,
+  users,
+} from './store.js';
+
+const emirates = [
+  'abu_dhabi',
+  'dubai',
+  'sharjah',
+  'ajman',
+  'umm_al_quwain',
+  'ras_al_khaimah',
+  'fujairah',
+] as const;
+
+const registerSchema = z.object({
+  organizationName: z.string().trim().min(2).max(160),
+  organizationNameAr: z.string().trim().max(160).optional(),
+  tradeLicenseNo: z.string().trim().max(80).optional(),
+  emirate: z.enum(emirates),
+  email: z.string().trim().email(),
+  password: z.string().min(12).max(128),
+  displayName: z.string().trim().min(2).max(120),
+});
+
+const loginSchema = z.object({
+  email: z.string().trim().email(),
+  password: z.string().min(1),
+});
+
+const facilitySchema = z.object({
+  name: z.string().trim().min(2).max(160),
+  emirate: z.enum(emirates),
+  sector: z.string().trim().max(120).optional(),
+  jurisdictions: z
+    .array(z.enum(['MOCCAE', 'EAD']))
+    .min(1)
+    .default(['MOCCAE']),
+});
+
+const invitationSchema = z.object({
+  email: z.string().trim().email(),
+  displayName: z.string().trim().min(2).max(120),
+  role: z.enum(['admin', 'data_provider', 'validator', 'verifier_readonly']),
+});
+
+function currentUser(request: { user: unknown }): AuthUser {
+  return request.user as AuthUser;
+}
+
+function canManageFacilities(user: AuthUser): boolean {
+  return ['owner', 'admin'].includes(user.role);
+}
 
 export async function buildApp() {
   const app = Fastify({
@@ -23,6 +84,10 @@ export async function buildApp() {
   await app.register(cors, {
     origin: process.env.WEB_ORIGIN ?? 'http://localhost:5173',
     credentials: true,
+  });
+
+  await app.register(jwt, {
+    secret: process.env.JWT_SECRET ?? 'athar-local-development-secret-change-me',
   });
 
   await app.register(swagger, {
@@ -57,5 +122,120 @@ export async function buildApp() {
     }),
   );
 
+  app.decorate('authenticate', async (request) => {
+    await request.jwtVerify();
+  });
+
+  app.post('/auth/register', { schema: { body: registerSchema } }, async (request, reply) => {
+    const input = request.body;
+    const email = input.email.toLowerCase();
+    if ([...users.values()].some((user) => user.email === email)) {
+      return reply.code(409).send({ message: 'An account with this email already exists' });
+    }
+
+    const organization = createOrganization({
+      nameEn: input.organizationName,
+      ...(input.organizationNameAr ? { nameAr: input.organizationNameAr } : {}),
+      ...(input.tradeLicenseNo ? { tradeLicenseNo: input.tradeLicenseNo } : {}),
+      emirate: input.emirate,
+      hceeFlag: false,
+    });
+    const user = {
+      id: randomUUID(),
+      email,
+      displayName: input.displayName,
+      role: 'owner' as const,
+      orgId: organization.id,
+      passwordHash: await hashPassword(input.password),
+    };
+    users.set(user.id, user);
+    const publicUser = toAuthUser(user);
+    const token = await reply.jwtSign(publicUser, { expiresIn: '8h' });
+    return reply.code(201).send({ user: publicUser, token });
+  });
+
+  app.post('/auth/login', { schema: { body: loginSchema } }, async (request, reply) => {
+    const input = request.body;
+    const user = [...users.values()].find(
+      (candidate) => candidate.email === input.email.toLowerCase(),
+    );
+    if (!user || !(await verifyPassword(input.password, user.passwordHash))) {
+      return reply.code(401).send({ message: 'Invalid email or password' });
+    }
+    const publicUser = toAuthUser(user);
+    const token = await reply.jwtSign(publicUser, { expiresIn: '8h' });
+    return { user: publicUser, token };
+  });
+
+  app.get('/auth/me', { onRequest: [app.authenticate] }, async (request) => ({
+    user: currentUser(request),
+  }));
+
+  app.get('/organizations/me', { onRequest: [app.authenticate] }, async (request, reply) => {
+    const organization = organizations.get(currentUser(request).orgId);
+    if (!organization) return reply.code(404).send({ message: 'Organization not found' });
+    return { organization };
+  });
+
+  app.get('/facilities', { onRequest: [app.authenticate] }, async (request) => {
+    const user = currentUser(request);
+    return {
+      facilities: [...facilities.values()].filter((facility) => facility.orgId === user.orgId),
+    };
+  });
+
+  app.post(
+    '/facilities',
+    { onRequest: [app.authenticate], schema: { body: facilitySchema } },
+    async (request, reply) => {
+      const user = currentUser(request);
+      if (!canManageFacilities(user))
+        return reply.code(403).send({ message: 'Admin role required' });
+      const facility = createFacility({
+        name: request.body.name,
+        emirate: request.body.emirate,
+        jurisdictions: request.body.jurisdictions,
+        ...(request.body.sector ? { sector: request.body.sector } : {}),
+        orgId: user.orgId,
+      });
+      return reply.code(201).send({ facility });
+    },
+  );
+
+  app.post(
+    '/members/invitations',
+    { onRequest: [app.authenticate], schema: { body: invitationSchema } },
+    async (request, reply) => {
+      const user = currentUser(request);
+      if (!canManageFacilities(user))
+        return reply.code(403).send({ message: 'Admin role required' });
+      const invitation = {
+        id: randomUUID(),
+        orgId: user.orgId,
+        email: request.body.email.toLowerCase(),
+        displayName: request.body.displayName,
+        role: request.body.role,
+        token: randomUUID(),
+        createdAt: new Date().toISOString(),
+      };
+      invitations.set(invitation.id, invitation);
+      return reply.code(201).send({ invitation });
+    },
+  );
+
+  app.get('/members/invitations', { onRequest: [app.authenticate] }, async (request, reply) => {
+    const user = currentUser(request);
+    if (!canManageFacilities(user)) return reply.code(403).send({ message: 'Admin role required' });
+    return {
+      invitations: [...invitations.values()].filter((invite) => invite.orgId === user.orgId),
+    };
+  });
+
   return app;
+}
+
+declare module 'fastify' {
+  interface FastifyInstance {
+    authenticate: (request: FastifyRequest) => Promise<void>;
+  }
 }
