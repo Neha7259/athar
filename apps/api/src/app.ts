@@ -13,21 +13,21 @@ import {
 } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { calculateEmissions, resolveFactor, type CalculationActivity } from '@athar/calc';
+import {
+  emissionSources as emissionSourcesTable,
+  evidenceDocuments as evidenceDocumentsTable,
+  facilities as facilitiesTable,
+  memberships,
+  organizations as organizationsTable,
+  users as usersTable,
+} from '@athar/db';
 import { provisionalFactors } from '@athar/factors';
 import { runDataQualityChecks, type QualityActivity } from '@athar/dq';
+import { eq, inArray } from 'drizzle-orm';
 import { hashPassword, verifyPassword, type AuthUser } from './auth.js';
-import {
-  createFacility,
-  createOrganization,
-  emissionSources,
-  evidenceDocuments,
-  facilities,
-  invitations,
-  organizations,
-  toAuthUser,
-  users,
-} from './store.js';
+import { invitations } from './store.js';
 import { persistEvidence } from './storage.js';
+import { getDb } from './database.js';
 
 const emirates = [
   'abu_dhabi',
@@ -189,40 +189,71 @@ export async function buildApp() {
   app.post('/auth/register', { schema: { body: registerSchema } }, async (request, reply) => {
     const input = request.body;
     const email = input.email.toLowerCase();
-    if ([...users.values()].some((user) => user.email === email)) {
+    const db = getDb();
+    const existing = await db
+      .select({ id: usersTable.id })
+      .from(usersTable)
+      .where(eq(usersTable.email, email));
+    if (existing.length > 0) {
       return reply.code(409).send({ message: 'An account with this email already exists' });
     }
 
-    const organization = createOrganization({
-      nameEn: input.organizationName,
-      ...(input.organizationNameAr ? { nameAr: input.organizationNameAr } : {}),
-      ...(input.tradeLicenseNo ? { tradeLicenseNo: input.tradeLicenseNo } : {}),
-      emirate: input.emirate,
-      hceeFlag: false,
+    const passwordHash = await hashPassword(input.password);
+    const result = await db.transaction(async (tx) => {
+      const [organization] = await tx
+        .insert(organizationsTable)
+        .values({
+          nameEn: input.organizationName,
+          ...(input.organizationNameAr ? { nameAr: input.organizationNameAr } : {}),
+          ...(input.tradeLicenseNo ? { tradeLicenseNo: input.tradeLicenseNo } : {}),
+          emirate: input.emirate,
+          hceeFlag: false,
+        })
+        .returning();
+      if (!organization) throw new Error('Organization creation failed');
+      const [user] = await tx
+        .insert(usersTable)
+        .values({ email, displayName: input.displayName, passwordHash })
+        .returning();
+      if (!user) throw new Error('User creation failed');
+      await tx
+        .insert(memberships)
+        .values({ orgId: organization.id, userId: user.id, role: 'owner' });
+      return { organization, user };
     });
-    const user = {
-      id: randomUUID(),
-      email,
-      displayName: input.displayName,
-      role: 'owner' as const,
-      orgId: organization.id,
-      passwordHash: await hashPassword(input.password),
+    const publicUser: AuthUser = {
+      id: result.user.id,
+      email: result.user.email,
+      displayName: result.user.displayName,
+      role: 'owner',
+      orgId: result.organization.id,
     };
-    users.set(user.id, user);
-    const publicUser = toAuthUser(user);
     const token = await reply.jwtSign(publicUser, { expiresIn: '8h' });
     return reply.code(201).send({ user: publicUser, token });
   });
 
   app.post('/auth/login', { schema: { body: loginSchema } }, async (request, reply) => {
     const input = request.body;
-    const user = [...users.values()].find(
-      (candidate) => candidate.email === input.email.toLowerCase(),
-    );
-    if (!user || !(await verifyPassword(input.password, user.passwordHash))) {
+    const db = getDb();
+    const [record] = await db
+      .select({ user: usersTable, orgId: memberships.orgId, role: memberships.role })
+      .from(usersTable)
+      .innerJoin(memberships, eq(memberships.userId, usersTable.id))
+      .where(eq(usersTable.email, input.email.toLowerCase()));
+    if (
+      !record ||
+      !record.user.passwordHash ||
+      !(await verifyPassword(input.password, record.user.passwordHash))
+    ) {
       return reply.code(401).send({ message: 'Invalid email or password' });
     }
-    const publicUser = toAuthUser(user);
+    const publicUser: AuthUser = {
+      id: record.user.id,
+      email: record.user.email,
+      displayName: record.user.displayName,
+      role: record.role,
+      orgId: record.orgId,
+    };
     const token = await reply.jwtSign(publicUser, { expiresIn: '8h' });
     return { user: publicUser, token };
   });
@@ -232,7 +263,10 @@ export async function buildApp() {
   }));
 
   app.get('/organizations/me', { onRequest: [app.authenticate] }, async (request, reply) => {
-    const organization = organizations.get(currentUser(request).orgId);
+    const [organization] = await getDb()
+      .select()
+      .from(organizationsTable)
+      .where(eq(organizationsTable.id, currentUser(request).orgId));
     if (!organization) return reply.code(404).send({ message: 'Organization not found' });
     return { organization };
   });
@@ -240,7 +274,10 @@ export async function buildApp() {
   app.get('/facilities', { onRequest: [app.authenticate] }, async (request) => {
     const user = currentUser(request);
     return {
-      facilities: [...facilities.values()].filter((facility) => facility.orgId === user.orgId),
+      facilities: await getDb()
+        .select()
+        .from(facilitiesTable)
+        .where(eq(facilitiesTable.orgId, user.orgId)),
     };
   });
 
@@ -251,13 +288,17 @@ export async function buildApp() {
       const user = currentUser(request);
       if (!canManageFacilities(user))
         return reply.code(403).send({ message: 'Admin role required' });
-      const facility = createFacility({
-        name: request.body.name,
-        emirate: request.body.emirate,
-        jurisdictions: request.body.jurisdictions,
-        ...(request.body.sector ? { sector: request.body.sector } : {}),
-        orgId: user.orgId,
-      });
+      const [facility] = await getDb()
+        .insert(facilitiesTable)
+        .values({
+          name: request.body.name,
+          emirate: request.body.emirate,
+          jurisdictions: request.body.jurisdictions,
+          ...(request.body.sector ? { sector: request.body.sector } : {}),
+          orgId: user.orgId,
+        })
+        .returning();
+      if (!facility) return reply.code(500).send({ message: 'Facility creation failed' });
       return reply.code(201).send({ facility });
     },
   );
@@ -293,15 +334,17 @@ export async function buildApp() {
 
   app.get('/sources', { onRequest: [app.authenticate] }, async (request) => {
     const user = currentUser(request);
-    const orgFacilityIds = new Set(
-      [...facilities.values()]
-        .filter((facility) => facility.orgId === user.orgId)
-        .map((facility) => facility.id),
-    );
+    const orgFacilities = await getDb()
+      .select({ id: facilitiesTable.id })
+      .from(facilitiesTable)
+      .where(eq(facilitiesTable.orgId, user.orgId));
+    const facilityIds = orgFacilities.map((facility) => facility.id);
+    if (facilityIds.length === 0) return { sources: [] };
     return {
-      sources: [...emissionSources.values()].filter((source) =>
-        orgFacilityIds.has(source.facilityId),
-      ),
+      sources: await getDb()
+        .select()
+        .from(emissionSourcesTable)
+        .where(inArray(emissionSourcesTable.facilityId, facilityIds)),
     };
   });
 
@@ -310,23 +353,28 @@ export async function buildApp() {
     { onRequest: [app.authenticate], schema: { body: sourceSchema } },
     async (request, reply) => {
       const user = currentUser(request);
-      const facility = facilities.get(request.body.facilityId);
+      const [facility] = await getDb()
+        .select({ id: facilitiesTable.id, orgId: facilitiesTable.orgId })
+        .from(facilitiesTable)
+        .where(eq(facilitiesTable.id, request.body.facilityId));
       if (!facility || facility.orgId !== user.orgId)
         return reply.code(404).send({ message: 'Facility not found' });
       if (!['owner', 'admin', 'data_provider'].includes(user.role)) {
         return reply.code(403).send({ message: 'Data provider role required' });
       }
-      const source = {
-        id: randomUUID(),
-        facilityId: request.body.facilityId,
-        ipccCategory: request.body.ipccCategory,
-        scope: request.body.scope,
-        fuelOrEnergyType: request.body.fuelOrEnergyType,
-        unit: request.body.unit,
-        ...(request.body.description ? { description: request.body.description } : {}),
-        isActive: true,
-      };
-      emissionSources.set(source.id, source);
+      const [source] = await getDb()
+        .insert(emissionSourcesTable)
+        .values({
+          facilityId: request.body.facilityId,
+          ipccCategory: request.body.ipccCategory,
+          scope: request.body.scope,
+          fuelOrEnergyType: request.body.fuelOrEnergyType,
+          unit: request.body.unit,
+          ...(request.body.description ? { description: request.body.description } : {}),
+          isActive: true,
+        })
+        .returning();
+      if (!source) return reply.code(500).send({ message: 'Source creation failed' });
       return reply.code(201).send({ source });
     },
   );
@@ -334,9 +382,10 @@ export async function buildApp() {
   app.get('/evidence', { onRequest: [app.authenticate] }, async (request) => {
     const user = currentUser(request);
     return {
-      documents: [...evidenceDocuments.values()].filter(
-        (document) => document.orgId === user.orgId,
-      ),
+      documents: await getDb()
+        .select()
+        .from(evidenceDocumentsTable)
+        .where(eq(evidenceDocumentsTable.orgId, user.orgId)),
     };
   });
 
@@ -409,19 +458,21 @@ export async function buildApp() {
     const uploadedAt = new Date();
     const retentionUntil = new Date(uploadedAt);
     retentionUntil.setFullYear(retentionUntil.getFullYear() + 5);
-    const document = {
-      id: randomUUID(),
-      orgId: user.orgId,
-      ...persisted,
-      mime: file.mimetype,
-      docType: docType.data,
-      originalFilename: file.filename,
-      uploadedBy: user.id,
-      uploadedAt: uploadedAt.toISOString(),
-      retentionUntil: retentionUntil.toISOString().slice(0, 10),
-      ...(ocrLang.data ? { ocrLang: ocrLang.data } : {}),
-    };
-    evidenceDocuments.set(document.id, document);
+    const [document] = await getDb()
+      .insert(evidenceDocumentsTable)
+      .values({
+        orgId: user.orgId,
+        ...persisted,
+        mime: file.mimetype,
+        docType: docType.data,
+        originalFilename: file.filename,
+        uploadedBy: user.id,
+        uploadedAt,
+        retentionUntil: retentionUntil.toISOString().slice(0, 10),
+        ...(ocrLang.data ? { ocrLang: ocrLang.data } : {}),
+      })
+      .returning();
+    if (!document) return reply.code(500).send({ message: 'Evidence metadata creation failed' });
     return reply.code(201).send({ document });
   });
 
